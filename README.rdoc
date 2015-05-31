@@ -1,5 +1,9 @@
 = rollout
 
+This is a fork of the original rollout gem at FetLife/rollout. 
+
+The current version of rollout that serializes and deserializes strings on every call causes performance issue with my use cases and I do not need support for multiple different storage mechanisms.
+
 Conditionally roll out features with redis.
 
 == Install it
