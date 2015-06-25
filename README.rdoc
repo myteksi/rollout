@@ -1,8 +1,6 @@
 = rollout
 
-This is a fork of the original rollout gem at FetLife/rollout. 
-
-The current version of rollout that serializes and deserializes strings on every call causes performance issue with my use cases and I do not need support for multiple different storage mechanisms.
+This is a fork of the original rollout gem at FetLife/rollout and completey modified for our use case.
 
 Conditionally roll out features with redis.
 
@@ -17,84 +15,49 @@ Initialize a rollout object. I assign it to a global var.
   $redis   = Redis.new
   $rollout = Rollout.new($redis)
 
-Check whether a feature is active for a particular user:
-  
-  $rollout.active?(:chat, User.first) # => true/false
+== City Flags ==
 
-You can activate features using a number of different mechanisms.
+  A city can have a feature in two states. Beta / Live.
+  To make a feature live for a city
 
-== Groups
+  $rollout.activate_city(feature: :<feature>, city_id: <city_id>, live: true)
 
-Rollout ships with one group by default: "all", which does exactly what it sounds like. 
+  To make a feature beta for a city
+  $rollout.activate_city(feature: :<feature>, city_id: <city_id>, live: false)
 
-You can activate the all group for the chat feature like this:
+  To deactivate a city (make a feature non-existent for that city)
+  $rollout.deactivate_city(feature: :<feature>, city_id: <city_id>)
 
-  $rollout.activate_group(:chat, :all)
+  You can obtain a list of features with their states for a city as follows
+  $rollout.city_features(city_id: <city_id>, feature_list: [:cashless, :beta_user, :non_existent_feature])
+  returns a hash { cashless: 'live', beta_user: 'beta', non_existent_feature: nil }
 
-You might also want to define your own groups. We have one for our caretakers:
+== User Flags ==
 
-  $rollout.define_group(:caretakers) do |user|
-    user.caretaker?
-  end
+  A user can either be activated / deactivated state for each feature.
 
-You can activate multiple groups per feature.
+  Feature State    User Active?    Whitelist     Blacklist
+     Live              Yes             No          No
+     Live              No              No          Yes
+     Beta              Yes             Yes         No
+     Beta              No              No          No
+     Non-Existent      Always No       No          No
 
-Deactivate groups like this:
+  To activate a feature for the user
+  $rollout.activate_user(feature: :<feature>, city_id: <city_id>, id: <user_id>)
 
-  $rollout.deactivate_group(:chat, :all)
+  To deactivate a feature for the user
+  $rollout.deactivate_user(feature: :<feature>, city_id: <city_id>, id: <user_id>)
 
-== Specific Users
+  To check whether a user is active for a feature, returns true / false
+  $rollout.user_active?(feature: :<feature>, city_id: <city_id>, id: <user_id>)
 
-You might want to let a specific user into a beta test or something. If that user isn't part of an existing group, you can let them in specifically:
-  
-  $rollout.activate_user(:chat, @user)
-
-Deactivate them like this:
-
-  $rollout.deactivate_user(:chat, @user)
-
-== User Percentages
-
-If you're rolling out a new feature, you might want to test the waters by slowly letting in a percentage of your users.
-
-  $rollout.activate_percentage(:chat, 20)
-
-The algorithm for determining which users get let in is this:
-
-  user.id % 10 < percentage / 10
-
-So, for 20%, users 0, 1, 10, 11, 20, 21, etc would be allowed in. Those users would remain in as the percentage increases.
-
-Deactivate all percentages like this:
-
-  $rollout.deactivate_percentage(:chat)
-
-== Feature is broken
-
-Deactivate everybody at once:
-
-  $rollout.deactivate_all
-
-For some of our less stable features, we are actually measuring the error rate using redis, and deactivating them automatically when it raises above a certain threshold. It's pretty cool. See http://github.com/jamesgolick/degrade for the failure detection code.
-
-== Namespacing
-
-Rollout separates its keys from other keys on the Redis server using the "feature" keyspace.
-
-You can namespace keys further to support multiple environments by using the http://github.com/defunkt/redis-namespace gem.
-
-  $ns = Redis::Namespace.new(Rails.env, :redis => $redis)
-  $rollout = Rollout.new($ns)
-  $rollout.activate_group(:chat, :all)
-  
-This example would use the "development:feature:chat:groups" key.
-
-== Implementations in other languages
-
-* Python: http://github.com/asenchi/proclaim
+  You can obtain a list of features for a user as follows
+  $rollout.user_features(id: <user_id>, city_id: <city_id>, feature_list: [:cashless, :beta_user, :non_existent_feature])
+  returns a hash { cashless: true, beta_user: false, non_existent_feature: false }
 
 == Note on Patches/Pull Requests
- 
+
 * Fork the project.
 * Make your feature addition or bug fix.
 * Add tests for it. This is important so I don't break it in a
