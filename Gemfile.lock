@@ -45,4 +45,4 @@ DEPENDENCIES
   jeweler (~> 1.6.4)
   mocha (= 0.9.8)
   rollout!
-  rspec
+  rspec (= 3.3.0)
