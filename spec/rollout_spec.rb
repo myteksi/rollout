@@ -130,6 +130,18 @@ describe "Rollout" do
   end
 
   describe '#user_active?' do
+    it 'returns false when feature is nil' do
+      expect(@rollout.user_active?(feature: nil, city_id: 1, id: 1)).to be false
+    end
+
+    it 'returns false when city_id is nil' do
+      expect(@rollout.user_active?(feature: :cashless, city_id: nil, id: 1)).to be false
+    end
+
+    it 'returns false when id is nil' do
+      expect(@rollout.user_active?(feature: :cashless, city_id: 1, id: nil)).to be false
+    end
+
     it 'returns false for a feature that does not exist' do
       expect(@rollout.user_active?(feature: :not_exist, city_id: 1, id: 1)).to be false
     end

@@ -57,6 +57,8 @@ class Rollout
   end
 
   def user_active?(feature:, city_id:, id:)
+    return false if feature.nil? || city_id.nil? || id.nil?
+
     if city_live?(feature: feature, city_id: city_id)
       !@redis.sismember(blacklist_user_key(feature), id)
     elsif city_beta?(feature: feature, city_id: city_id)
