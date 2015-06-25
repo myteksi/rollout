@@ -1,132 +1,108 @@
 class Rollout
   def initialize(redis)
     @redis  = redis
-    @groups = {"all" => lambda { |user| true }}
   end
 
-  def activate_globally(feature)
-    @redis.sadd(global_key, feature)
-  end
+  # cashless_live: [1, 2, 3] # cashless_beta: [4, 5, 6]
+  def activate_city(feature:, city_id:, live: false)
+    return if city_id.nil? || feature.nil?
 
-  def deactivate_globally(feature)
-    @redis.srem(global_key, feature)
-  end
-
-  def activate_group(feature, group)
-    @redis.sadd(group_key(feature), group)
-  end
-
-  def deactivate_group(feature, group)
-    @redis.srem(group_key(feature), group)
-  end
-
-  def deactivate_all(feature)
-    @redis.del(group_key(feature))
-    @redis.del(user_key(feature))
-    @redis.del(percentage_key(feature))
-    deactivate_globally(feature)
-  end
-
-  def activate_user(feature, user)
-    @redis.sadd(user_key(feature), user.id)
-  end
-
-  def deactivate_user(feature, user)
-    @redis.srem(user_key(feature), user.id)
-  end
-
-  def define_group(group, &block)
-    @groups[group.to_s] = block
-  end
-
-  def active?(feature, user = nil)
-    if user
-      active_globally?(feature) ||
-        user_in_active_group?(feature, user) ||
-          user_active?(feature, user) ||
-            user_within_active_percentage?(feature, user)
+    if live
+      @redis.sadd(live_features_key(feature), city_id)
+      @redis.srem(beta_features_key(feature), city_id)
     else
-      active_globally?(feature)
+      @redis.sadd(beta_features_key(feature), city_id)
+      @redis.srem(live_features_key(feature), city_id)
     end
   end
 
-  def activate_percentage(feature, percentage)
-    @redis.set(percentage_key(feature), percentage)
+  # Neither live / beta
+  def deactivate_city(feature:, city_id:)
+    return if feature.nil? || city_id.nil?
+
+    @redis.srem(live_features_key(feature), city_id)
+    @redis.srem(beta_features_key(feature), city_id)
   end
 
-  def deactivate_percentage(feature)
-    @redis.del(percentage_key(feature))
-  end
-
-  def info(feature = nil)
-    if feature
-      {
-        :percentage => (active_percentage(feature) || 0).to_i,
-        :groups     => active_groups(feature).map { |g| g.to_sym },
-        :users      => active_user_ids(feature),
-        :global     => active_global_features
-      }
-    else
-      {
-        :global     => active_global_features
-      }
-    end
-  end
-
-  private
-    def key(name)
-      "feature:#{name}"
-    end
-
-    def group_key(name)
-      "#{key(name)}:groups"
-    end
-
-    def user_key(name)
-      "#{key(name)}:users"
-    end
-
-    def percentage_key(name)
-      "#{key(name)}:percentage"
-    end
-
-    def global_key
-      "feature:__global__"
-    end
-
-    def active_groups(feature)
-      @redis.smembers(group_key(feature)) || []
-    end
-
-    def active_user_ids(feature)
-      @redis.smembers(user_key(feature)).map { |id| id.to_i }
-    end
-
-    def active_global_features
-      (@redis.smembers(global_key) || []).map(&:to_sym)
-    end
-
-    def active_percentage(feature)
-      @redis.get(percentage_key(feature))
-    end
-
-    def active_globally?(feature)
-      @redis.sismember(global_key, feature)
-    end
-
-    def user_in_active_group?(feature, user)
-      active_groups(feature).any? do |group|
-        @groups.key?(group) && @groups[group].call(user)
+  # Returns a hash as follows { cashless: 'live', beta: nil, something: 'beta' }
+  def city_features(city_id: , feature_list: [])
+    features = {}
+    feature_list.each do |feature|
+      if city_live?(feature: feature, city_id: city_id)
+        features[feature] = 'live'
+      elsif city_beta?(feature: feature, city_id: city_id)
+        features[feature] = 'beta'
+      else
+        features[feature] = nil
       end
     end
 
-    def user_active?(feature, user)
-      @redis.sismember(user_key(feature), user.id)
+    features
+  end
+
+  def activate_user(feature:, city_id:, id:)
+    if city_live?(feature: feature, city_id: city_id)
+      @redis.srem(blacklist_user_key(feature), id)
+    elsif city_beta?(feature: feature, city_id: city_id)
+      @redis.sadd(whitelist_user_key(feature), id)
+    end
+  end
+
+  def deactivate_user(feature:, city_id:, id:)
+    if city_live?(feature: feature, city_id: city_id)
+      @redis.sadd(blacklist_user_key(feature), id)
+    elsif city_beta?(feature: feature, city_id: city_id)
+      @redis.srem(whitelist_user_key(feature), id)
+    end
+  end
+
+  def user_active?(feature:, city_id:, id:)
+    if city_live?(feature: feature, city_id: city_id)
+      !@redis.sismember(blacklist_user_key(feature), id)
+    elsif city_beta?(feature: feature, city_id: city_id)
+      @redis.sismember(whitelist_user_key(feature), id)
+    else
+      false
+    end
+  end
+
+  # Returns a hash as follows { cashless: 'live', beta: nil, something: 'beta' }
+  def user_features(id:, city_id:, feature_list: [])
+    features = {}
+    feature_list.each do |feature|
+      if user_active?(feature: feature, city_id: city_id, id: id)
+        features[feature] = true
+      else
+        features[feature] = false
+      end
     end
 
-    def user_within_active_percentage?(feature, user)
-      percentage = active_percentage(feature)
-      return false if percentage.nil?
-      user.id % 100 < percentage.to_i
-    end
+    features
+  end
+
+  private
+
+  def city_live?(feature:, city_id:)
+   @redis.sismember(live_features_key(feature), city_id)
+  end
+
+  def city_beta?(feature:, city_id:)
+    @redis.sismember(beta_features_key(feature), city_id)
+  end
+
+  def live_features_key(feature)
+    "city_#{feature}_live"
+  end
+
+  def beta_features_key(feature)
+    "city_#{feature}_beta"
+  end
+
+  def blacklist_user_key(feature)
+    "user_#{feature}_blacklist"
+  end
+
+  def whitelist_user_key(feature)
+    "user_#{feature}_whitelist"
+  end
 end

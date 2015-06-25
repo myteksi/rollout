@@ -1,4 +1,4 @@
-require File.expand_path(File.dirname(__FILE__) + '/spec_helper')
+require 'spec_helper'
 
 describe "Rollout" do
   before do
@@ -6,217 +6,180 @@ describe "Rollout" do
     @rollout = Rollout.new(@redis)
   end
 
-  describe "when a group is activated" do
-    before do
-      @rollout.define_group(:fivesonly) { |user| user.id == 5 }
-      @rollout.activate_group(:chat, :fivesonly)
+  describe '#activate_city' do
+    it 'adds the city id to the live features set if live is passed as true' do
+      @rollout.activate_city(feature: :cashless, city_id: 1, live: true)
+      expect(@redis.sismember('city_cashless_live', 1)).to be true
+      expect(@redis.sismember('city_cashless_beta', 1)).to be false
     end
 
-    it "the feature is active for users for which the block evaluates to true" do
-      @rollout.should be_active(:chat, stub(:id => 5))
+    it 'adds the city id to the beta features set if live is passed as false' do
+      @rollout.activate_city(feature: :cashless, city_id: 1, live: false)
+      expect(@redis.sismember('city_cashless_beta', 1)).to be true
+      expect(@redis.sismember('city_cashless_live', 1)).to be false
     end
 
-    it "is not active for users for which the block evaluates to false" do
-      @rollout.should_not be_active(:chat, stub(:id => 1))
+    it 'if nil city id is passed in it does not do anything' do
+      @rollout.activate_city(feature: :cashless, city_id: nil, live: false)
+      expect(@redis.sismember('city_cashless_beta', 1)).to be false
+      expect(@redis.sismember('city_cashless_live', 1)).to be false
     end
 
-    it "is not active if a group is found in Redis but not defined in Rollout" do
-      @rollout.activate_group(:chat, :fake)
-      @rollout.should_not be_active(:chat, stub(:id => 1))
-    end
-  end
-
-  describe "the default all group" do
-    before do
-      @rollout.activate_group(:chat, :all)
-    end
-
-    it "evaluates to true no matter what" do
-      @rollout.should be_active(:chat, stub(:id => 0))
+    it 'if nil feature is passed in it does not do anything' do
+      @rollout.activate_city(feature: nil, city_id: 1, live: false)
+      expect(@redis.sismember('city_cashless_beta', 1)).to be false
+      expect(@redis.sismember('city_cashless_live', 1)).to be false
     end
   end
 
-  describe "deactivating a group" do
-    before do
-      @rollout.define_group(:fivesonly) { |user| user.id == 5 }
-      @rollout.activate_group(:chat, :all)
-      @rollout.activate_group(:chat, :fivesonly)
-      @rollout.deactivate_group(:chat, :all)
-    end
+  describe '#deactivate_city' do
+    before { @redis.sadd('city_cashless_live', 1) }
 
-    it "deactivates the rules for that group" do
-      @rollout.should_not be_active(:chat, stub(:id => 10))
-    end
-
-    it "leaves the other groups active" do
-      @rollout.should be_active(:chat, stub(:id => 5))
+    it 'removes the city from both the live set and the beta set' do
+      @rollout.deactivate_city(feature: :cashless, city_id: 1)
+      expect(@redis.sismember('city_cashless_live', 1)).to be false
     end
   end
 
-  describe "deactivating a feature completely" do
-    before do
-      @rollout.define_group(:fivesonly) { |user| user.id == 5 }
-      @rollout.activate_group(:chat, :all)
-      @rollout.activate_group(:chat, :fivesonly)
-      @rollout.activate_user(:chat, stub(:id => 51))
-      @rollout.activate_percentage(:chat, 100)
-      @rollout.activate_globally(:chat)
-      @rollout.deactivate_all(:chat)
+  describe '#city_features' do
+    it 'returns an empty hash if no feature list is provided' do
+      expect(@rollout.city_features(city_id: 1)).to eq({})
     end
 
-    it "removes all of the groups" do
-      @rollout.should_not be_active(:chat, stub(:id => 0))
+    it 'returns nil for features that are specified but do not exist' do
+      expect(@rollout.city_features(city_id: 1, feature_list: [:cashless])).to eq({ cashless: nil })
     end
 
-    it "removes all of the users" do
-      @rollout.should_not be_active(:chat, stub(:id => 51))
+    it 'returns beta for beta features' do
+      @rollout.activate_city(feature: :cashless, city_id: 1)
+      expect(@rollout.city_features(city_id: 1, feature_list: [:cashless])).to eq({ cashless: 'beta' })
     end
 
-    it "removes the percentage" do
-      @rollout.should_not be_active(:chat, stub(:id => 24))
-    end
-
-    it "removes globally" do
-      @rollout.should_not be_active(:chat)
+    it 'returns live for live features' do
+      @rollout.activate_city(feature: :cashless, city_id: 1, live: true)
+      expect(@rollout.city_features(city_id: 1, feature_list: [:cashless])).to eq({ cashless: 'live' })
     end
   end
 
-  describe "activating a specific user" do
-    before do
-      @rollout.activate_user(:chat, stub(:id => 42))
+  describe '#activate_user' do
+    it 'does not add the user to any list if the feature is non-existent' do
+      @rollout.activate_user(feature: :cashless, city_id: 1, id: 1)
+
+      expect(@redis.sismember('user_cashless_blacklist', 1)).to be false
+      expect(@redis.sismember('user_cashless_whitelist', 1)).to be false
     end
 
-    it "is active for that user" do
-      @rollout.should be_active(:chat, stub(:id => 42))
+    it 'does not add the user to any list if the feature is live for the city' do
+      @rollout.activate_city(feature: :cashless, city_id: 1, live: true)
+      @rollout.activate_user(feature: :cashless, city_id: 1, id: 1)
+
+      expect(@redis.sismember('user_cashless_blacklist', 1)).to be false
+      expect(@redis.sismember('user_cashless_whitelist', 1)).to be false
     end
 
-    it "remains inactive for other users" do
-      @rollout.should_not be_active(:chat, stub(:id => 24))
-    end
-  end
+    it 'adds the user to the whitelist if the feature is in beta for the city' do
+      @rollout.activate_city(feature: :cashless, city_id: 1, live: false)
+      @rollout.activate_user(feature: :cashless, city_id: 1, id: 1)
 
-  describe "deactivating a specific user" do
-    before do
-      @rollout.activate_user(:chat, stub(:id => 42))
-      @rollout.activate_user(:chat, stub(:id => 24))
-      @rollout.deactivate_user(:chat, stub(:id => 42))
+      expect(@redis.sismember('user_cashless_blacklist', 1)).to be false
+      expect(@redis.sismember('user_cashless_whitelist', 1)).to be true
     end
 
-    it "that user should no longer be active" do
-      @rollout.should_not be_active(:chat, stub(:id => 42))
-    end
+    it 'removes the user from the blacklist if the feature is live for the city' do
+      @rollout.activate_city(feature: :cashless, city_id: 1, live: true)
+      @rollout.deactivate_user(feature: :cashless, city_id: 1, id: 1)
+      expect(@redis.sismember('user_cashless_blacklist', 1)).to be true
 
-    it "remains active for other active users" do
-      @rollout.should be_active(:chat, stub(:id => 24))
-    end
-  end
-
-  describe "activating a feature globally" do
-    before do
-      @rollout.activate_globally(:chat)
-    end
-
-    it "activates the feature" do
-      @rollout.should be_active(:chat)
+      @rollout.activate_user(feature: :cashless, city_id: 1, id: 1)
+      expect(@redis.sismember('user_cashless_blacklist', 1)).to be false
     end
   end
 
-  describe "activating a feature for a percentage of users" do
-    before do
-      @rollout.activate_percentage(:chat, 20)
+  describe '#deactivate_user' do
+    it 'does not add the user to any list if the feature is non-existent' do
+      @rollout.activate_user(feature: :cashless, city_id: 1, id: 1)
+
+      expect(@redis.sismember('user_cashless_blacklist', 1)).to be false
+      expect(@redis.sismember('user_cashless_whitelist', 1)).to be false
     end
 
-    it "activates the feature for that percentage of the users" do
-      (1..120).select { |id| @rollout.active?(:chat, stub(:id => id)) }.length.should == 39
-    end
-  end
+    it 'adds the user to the blacklist if the feature is live for the city' do
+      @rollout.activate_city(feature: :cashless, city_id: 1, live: true)
+      @rollout.deactivate_user(feature: :cashless, city_id: 1, id: 1)
 
-  describe "activating a feature for a percentage of users" do
-    before do
-      @rollout.activate_percentage(:chat, 20)
+      expect(@redis.sismember('user_cashless_blacklist', 1)).to be true
+      expect(@redis.sismember('user_cashless_whitelist', 1)).to be false
     end
 
-    it "activates the feature for that percentage of the users" do
-      (1..200).select { |id| @rollout.active?(:chat, stub(:id => id)) }.length.should == 40
-    end
-  end
+    it 'does not add the user to any list if the feature is in beta for the city' do
+      @rollout.activate_city(feature: :cashless, city_id: 1, live: false)
+      @rollout.deactivate_user(feature: :cashless, city_id: 1, id: 1)
 
-  describe "activating a feature for a percentage of users" do
-    before do
-      @rollout.activate_percentage(:chat, 5)
+      expect(@redis.sismember('user_cashless_blacklist', 1)).to be false
+      expect(@redis.sismember('user_cashless_whitelist', 1)).to be false
     end
 
-    it "activates the feature for that percentage of the users" do
-      (1..100).select { |id| @rollout.active?(:chat, stub(:id => id)) }.length.should == 5
-    end
-  end
+    it 'removes the user from the whitelist if the feature is in beta for the city' do
+      @rollout.activate_city(feature: :cashless, city_id: 1, live: false)
+      @rollout.activate_user(feature: :cashless, city_id: 1, id: 1)
+      expect(@redis.sismember('user_cashless_whitelist', 1)).to be true
 
-
-  describe "deactivating the percentage of users" do
-    before do
-      @rollout.activate_percentage(:chat, 100)
-      @rollout.deactivate_percentage(:chat)
-    end
-
-    it "becomes inactivate for all users" do
-      @rollout.should_not be_active(:chat, stub(:id => 24))
+      @rollout.deactivate_user(feature: :cashless, city_id: 1, id: 1)
+      expect(@redis.sismember('user_cashless_whitelist', 1)).to be false
     end
   end
 
-  describe "deactivating the feature globally" do
-    before do
-      @rollout.activate_globally(:chat)
-      @rollout.deactivate_globally(:chat)
+  describe '#user_active?' do
+    it 'returns false for a feature that does not exist' do
+      expect(@rollout.user_active?(feature: :not_exist, city_id: 1, id: 1)).to be false
     end
 
-    it "becomes inactivate" do
-      @rollout.should_not be_active(:chat)
+    it 'returns false when blacklisted for a feature which is live' do
+      @rollout.activate_city(feature: :cashless, city_id: 1, live: true)
+      @redis.sadd('user_cashless_blacklist', 1)
+
+      expect(@rollout.user_active?(feature: :cashless, city_id: 1, id: 1)).to be false
+    end
+
+    it 'returns false when not whitelisted for a feature which is in beta' do
+      @rollout.activate_city(feature: :cashless, city_id: 1, live: false)
+      @redis.srem('user_cashless_whitelist', 1)
+
+      expect(@rollout.user_active?(feature: :cashless, city_id: 1, id: 1)).to be false
+    end
+
+    it 'returns true when whitelisted for a feature which is beta' do
+      @rollout.activate_city(feature: :cashless, city_id: 1, live: false)
+      @redis.sadd('user_cashless_whitelist', 1)
+
+      expect(@rollout.user_active?(feature: :cashless, city_id: 1, id: 1)).to be true
+    end
+
+    it 'returns true when not blacklisted for a feature which is live' do
+      @rollout.activate_city(feature: :cashless, city_id: 1, live: true)
+      @redis.srem('user_cashless_blacklist', 1)
+
+      expect(@rollout.user_active?(feature: :cashless, city_id: 1, id: 1)).to be true
     end
   end
 
-  describe "#info" do
-    context "global features" do
-      let(:features) { [:signup, :chat, :table] }
-
-      before do
-        features.each do |f|
-          @rollout.activate_globally(f)
-        end
-      end
-
-      it "returns all global features" do
-        @rollout.info.should eq({ :global => features.reverse })
-      end
+  describe '#user_features' do
+    it 'returns an empty hash if no feature list is provided' do
+      expect(@rollout.user_features(id: 1, city_id: 1)).to eq({})
     end
 
-    describe "with a percentage set" do
-      before do
-        @rollout.activate_percentage(:chat, 10)
-        @rollout.activate_group(:chat, :caretakers)
-        @rollout.activate_group(:chat, :greeters)
-        @rollout.activate_globally(:signup)
-        @rollout.activate_user(:chat, stub(:id => 42))
-      end
-
-      it "returns info about all the activations" do
-        @rollout.info(:chat).should == {
-          :percentage => 10,
-          :groups     => [:greeters, :caretakers],
-          :users      => [42],
-          :global     => [:signup]
-        }
-      end
+    it 'returns false for features that are specified but do not exist' do
+      expect(@rollout.user_features(id: 1, city_id: 1, feature_list: [:not_exist])).to eq({ not_exist: false })
     end
 
-    describe "without a percentage set" do
-      it "the percentage defaults to 0" do
-        @rollout.info(:chat).should == {
-          :percentage => 0,
-          :groups     => [],
-          :users      => [],
-          :global     => []
-        }
-      end
+    it 'returns true if the user is activated for the feature' do
+      expect(@rollout).to receive(:user_active?).with(feature: :cashless, city_id: 1, id: 1).and_return true
+      expect(@rollout.user_features(id: 1, city_id: 1, feature_list: [:cashless])).to eq({ cashless: true })
+    end
+
+    it 'returns false if the user is deactivated for the feature' do
+      expect(@rollout).to receive(:user_active?).with(feature: :cashless, city_id: 1, id: 1).and_return false
+      expect(@rollout.user_features(id: 1, city_id: 1, feature_list: [:cashless])).to eq({ cashless: false })
     end
   end
 end
